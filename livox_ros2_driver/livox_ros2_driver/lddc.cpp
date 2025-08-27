@@ -38,14 +38,10 @@
 #include "lds_lidar.h"
 #include "lds_lvx.h"
 
-int64_t ros_time_offset = -115703372; // nanoseconds
+int64_t time_offset = -115703372; // nanoseconds
 int64_t ros_time = 0;
+int64_t last_timestamp = 0;
 int64_t last_ros_time = 0;
-uint64_t last_livox_timestamp = 0;
-
-int64_t init_ros_time = 0;
-int64_t init_timestamp = 0;
-int64_t last_abs_timestamp = 0;
 
 namespace livox_ros {
 
@@ -403,17 +399,7 @@ uint32_t Lddc::PublishCustomPointcloud(LidarDataQueue *queue,
     LivoxEthPacket *raw_packet =
         reinterpret_cast<LivoxEthPacket *>(storage_packet.raw_data);
     timestamp = GetStoragePacketTimestamp(&storage_packet, data_source);
-    abs_timestamp = timestamp - init_timestamp + init_ros_time;
-    ros_time = rclcpp::Clock().now().nanoseconds() + ros_time_offset;
-    if (!published_packet && abs(ros_time - abs_timestamp) > 10000000) {
-      init_timestamp = timestamp;
-      init_ros_time = ros_time;
-      abs_timestamp = timestamp - init_timestamp + init_ros_time;
-      RCLCPP_INFO(cur_node_->get_logger(), "initialize ros time.");
-      RCLCPP_INFO(cur_node_->get_logger(), "init_timestamp: %ld.%09ld", init_timestamp/1000000000, init_timestamp%1000000000);
-      RCLCPP_INFO(cur_node_->get_logger(), "init_ros_time : %ld.%09ld", init_ros_time/1000000000, init_ros_time%1000000000);
-    }
-
+    ros_time = rclcpp::Clock().now().nanoseconds() + time_offset;
     int64_t packet_gap = timestamp - last_timestamp;
     if ((packet_gap > lidar->packet_interval_max) &&
         lidar->data_is_pubulished) {
@@ -427,16 +413,15 @@ uint32_t Lddc::PublishCustomPointcloud(LidarDataQueue *queue,
     }
     /** first packet */
     if (!published_packet) {
-      //livox_msg.timebase = timestamp;
-      livox_msg.timebase = abs_timestamp;
+      livox_msg.timebase = timestamp;
       packet_offset_time = 0;
       /** convert to ros time stamp */
       //livox_msg.header.stamp = rclcpp::Time(timestamp);
-      livox_msg.header.stamp = rclcpp::Time(abs_timestamp);
-      if (last_abs_timestamp > abs_timestamp + 10000000) {RCLCPP_ERROR(cur_node_->get_logger(), "lidar regress!!");exit(0);}
+      livox_msg.header.stamp = rclcpp::Time(ros_time);
+      last_timestamp = timestamp;
+      last_ros_time = ros_time;
     } else {
-      //packet_offset_time = (uint32_t)(timestamp - livox_msg.timebase);
-      packet_offset_time = (uint32_t)(abs_timestamp - livox_msg.timebase);
+      packet_offset_time = (uint32_t)(timestamp - livox_msg.timebase);
     }
     uint32_t single_point_num = storage_packet.point_num * echo_num;
 
@@ -468,7 +453,6 @@ uint32_t Lddc::PublishCustomPointcloud(LidarDataQueue *queue,
 
     livox_msg.point_num += single_point_num;
     last_timestamp = timestamp;
-    last_abs_timestamp = abs_timestamp;
     ++published_packet;
   }
 
@@ -507,10 +491,9 @@ uint32_t Lddc::PublishImuData(LidarDataQueue *queue, uint32_t packet_num,
   LivoxEthPacket *raw_packet =
       reinterpret_cast<LivoxEthPacket *>(storage_packet.raw_data);
   timestamp = GetStoragePacketTimestamp(&storage_packet, data_source);
-  abs_timestamp = timestamp - init_timestamp + init_ros_time;
   if (timestamp) {
     //imu_data.header.stamp = rclcpp::Time(timestamp);  // to ros time stamp
-    imu_data.header.stamp = rclcpp::Time(abs_timestamp);
+    imu_data.header.stamp = rclcpp::Time(timestamp - last_timestamp + last_ros_time);
   }
 
   uint8_t point_buf[2048];
